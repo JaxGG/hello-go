@@ -1,0 +1,25 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts
+hello-go
+hello
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation
+README.md
+*.md
+
+# CI/CD
+.github
+

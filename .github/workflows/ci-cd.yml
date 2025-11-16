@@ -1,0 +1,112 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # deploy:
+  #   needs: build-and-push
+  #   runs-on: ubuntu-latest
+  #   if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+  #   permissions:
+  #     contents: read
+  #     packages: read
+
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+
+  #     - name: Set up kubectl
+  #       uses: azure/setup-kubectl@v3
+  #       with:
+  #         version: 'latest'
+
+  #     - name: Configure kubectl
+  #       run: |
+  #         echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
+  #         kubectl config set-context --current --namespace=${{ secrets.KUBERNETES_NAMESPACE || 'default' }}
+
+      # - name: Deploy to Kubernetes
+      #   run: |
+      #     # 更新 deployment.yaml 中的镜像标签
+      #     IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+      #     sed -i "s|image:.*|image: ${IMAGE_TAG}|g" k8s/deployment.yaml
+          
+      #     # 部署核心资源（Deployment + Service）
+      #     kubectl apply -f k8s/deployment.yaml
+          
+      #     # 可选：部署 HPA（如果集群有 metrics-server）
+      #     kubectl apply -f k8s/hpa.yaml 2>/dev/null || echo "HPA skipped (metrics-server may not be installed)"
+          
+      #     # 可选：部署 Ingress（如果需要域名访问）
+      #     # kubectl apply -f k8s/ingress.yaml
+          
+      #     # 等待 Deployment 完成
+      #     kubectl rollout status deployment/hello -n ${{ secrets.KUBERNETES_NAMESPACE || 'default' }}
+          
+      #     # 显示部署状态和访问信息
+      #     echo "=== Pods ==="
+      #     kubectl get pods -l app=hello -n ${{ secrets.KUBERNETES_NAMESPACE || 'default' }}
+      #     echo ""
+      #     echo "=== Services ==="
+      #     kubectl get svc hello -n ${{ secrets.KUBERNETES_NAMESPACE || 'default' }}
+      #     echo ""
+      #     echo "=== 访问信息 ==="
+      #     NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null || echo "获取节点IP失败")
+      #     echo "通过 IP 访问: http://${NODE_IP}:30080"
+      #     echo "或使用端口转发: kubectl port-forward svc/hello 8080:8080"
+

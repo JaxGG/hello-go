@@ -1,0 +1,17 @@
+# LoadBalancer 类型的 Service（适用于云平台，如 AWS、GCP、Azure 等）
+# 如果使用云平台，可以使用此文件替代 deployment.yaml 中的 NodePort Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-lb
+spec:
+  type: LoadBalancer
+  selector:
+    app: hello
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+  # 如果云平台支持，可以指定外部 IP
+  # loadBalancerIP: "YOUR_STATIC_IP"
+
