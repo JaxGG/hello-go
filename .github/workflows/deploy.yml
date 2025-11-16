@@ -1,0 +1,76 @@
+name: Deploy to Kubernetes
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: '镜像标签 (例如: latest, main-abc123)'
+        required: true
+        default: 'latest'
+        type: string
+      namespace:
+        description: 'Kubernetes 命名空间'
+        required: false
+        default: 'default'
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
+          kubectl config set-context --current --namespace=${{ inputs.namespace || secrets.KUBERNETES_NAMESPACE || 'default' }}
+
+      - name: Deploy to Kubernetes
+        run: |
+          NAMESPACE="${{ inputs.namespace || secrets.KUBERNETES_NAMESPACE || 'default' }}"
+          IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+          
+          echo "准备部署镜像: ${IMAGE_TAG}"
+          echo "目标命名空间: ${NAMESPACE}"
+          
+          # 更新 deployment.yaml 中的镜像标签
+          sed -i "s|image:.*|image: ${IMAGE_TAG}|g" k8s/deployment.yaml
+          
+          # 部署核心资源（Deployment + Service）
+          kubectl apply -f k8s/deployment.yaml -n ${NAMESPACE}
+          
+          # 可选：部署 HPA（如果集群有 metrics-server）
+          kubectl apply -f k8s/hpa.yaml -n ${NAMESPACE} 2>/dev/null || echo "HPA skipped (metrics-server may not be installed)"
+          
+          # 等待 Deployment 完成
+          kubectl rollout status deployment/hello -n ${NAMESPACE}
+          
+          # 显示部署状态和访问信息
+          echo ""
+          echo "=== 部署完成 ==="
+          echo ""
+          echo "=== Pods ==="
+          kubectl get pods -l app=hello -n ${NAMESPACE}
+          echo ""
+          echo "=== Services ==="
+          kubectl get svc hello -n ${NAMESPACE}
+          echo ""
+          echo "=== 访问信息 ==="
+          NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null || echo "获取节点IP失败")
+          echo "通过 IP 访问: http://${NODE_IP}:30080"
+          echo "或使用端口转发: kubectl port-forward svc/hello 8080:8080 -n ${NAMESPACE}"
+
