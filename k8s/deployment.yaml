@@ -12,10 +12,14 @@ spec:
       labels:
         app: hello
     spec:
+      # 如果使用私有镜像仓库，取消下面的注释并创建对应的 Secret
+      # imagePullSecrets:
+      # - name: ghcr-secret
       containers:
       - name: hello
-        image: ghcr.io/jaxgg/hello-go:latest
-        imagePullPolicy: Always
+        # 本地镜像名，webhook 会自动从 GHCR 拉取并加载到 kind 集群
+        image: hello-go:latest
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8080
         resources:

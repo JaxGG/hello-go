@@ -1,17 +1,21 @@
-name: Deploy to Kubernetes
+name: Deploy to Local Kubernetes
 
 on:
+  # 自动触发：当 CI/CD Pipeline 的 build-and-push job 成功完成后
+  workflow_run:
+    workflows: ["CI/CD Pipeline"]
+    types:
+      - completed
+    branches:
+      - main
+      - master
+  # 手动触发：保留手动触发功能
   workflow_dispatch:
     inputs:
       image_tag:
-        description: '镜像标签 (例如: latest, main-abc123)'
-        required: true
-        default: 'latest'
-        type: string
-      namespace:
-        description: 'Kubernetes 命名空间'
+        description: '镜像标签 (例如: latest, main-abc123)，留空则使用 latest'
         required: false
-        default: 'default'
+        default: 'latest'
         type: string
 
 env:
@@ -20,6 +24,8 @@ env:
 
 jobs:
   deploy:
+    # 只在 build-and-push job 成功时运行
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -29,48 +35,65 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'latest'
-
-      - name: Configure kubectl
+      - name: Determine image tag
+        id: image-tag
         run: |
-          echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
-          kubectl config set-context --current --namespace=${{ inputs.namespace || secrets.KUBERNETES_NAMESPACE || 'default' }}
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            # 手动触发：使用输入的标签或默认 latest
+            IMAGE_TAG_INPUT="${{ inputs.image_tag }}"
+            if [ -z "$IMAGE_TAG_INPUT" ]; then
+              IMAGE_TAG_INPUT="latest"
+            fi
+            echo "tag=${IMAGE_TAG_INPUT}" >> $GITHUB_OUTPUT
+            echo "commit=${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "ref=${{ github.ref }}" >> $GITHUB_OUTPUT
+          else
+            # 自动触发：使用 latest 标签（对应 build-and-push 构建的 latest 标签）
+            echo "tag=latest" >> $GITHUB_OUTPUT
+            echo "commit=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
+            echo "ref=${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Deploy to Kubernetes
+      - name: Trigger local deployment via webhook
         run: |
-          NAMESPACE="${{ inputs.namespace || secrets.KUBERNETES_NAMESPACE || 'default' }}"
-          IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+          # 通过内网穿透的 webhook URL 触发本地部署
+          WEBHOOK_URL="${WEBHOOK_URL}"
+          
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "Error: WEBHOOK_URL secret is not set"
+            exit 1
+          fi
+          
+          IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.tag }}"
           
           echo "准备部署镜像: ${IMAGE_TAG}"
-          echo "目标命名空间: ${NAMESPACE}"
+          echo "Webhook URL: ${WEBHOOK_URL}"
+          echo "Commit: ${{ steps.image-tag.outputs.commit }}"
+          echo "Ref: ${{ steps.image-tag.outputs.ref }}"
           
-          # 更新 deployment.yaml 中的镜像标签
-          sed -i "s|image:.*|image: ${IMAGE_TAG}|g" k8s/deployment.yaml
+          # 调用本地 webhook 服务器
+          response=$(curl -s -w "\n%{http_code}" -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: deployment" \
+            -d "{
+              \"image\": \"${IMAGE_TAG}\",
+              \"tag\": \"${{ steps.image-tag.outputs.tag }}\",
+              \"ref\": \"${{ steps.image-tag.outputs.ref }}\",
+              \"commit\": \"${{ steps.image-tag.outputs.commit }}\"
+            }")
           
-          # 部署核心资源（Deployment + Service）
-          kubectl apply -f k8s/deployment.yaml -n ${NAMESPACE}
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
           
-          # 可选：部署 HPA（如果集群有 metrics-server）
-          kubectl apply -f k8s/hpa.yaml -n ${NAMESPACE} 2>/dev/null || echo "HPA skipped (metrics-server may not be installed)"
+          echo "Webhook response (HTTP $http_code):"
+          echo "$body"
           
-          # 等待 Deployment 完成
-          kubectl rollout status deployment/hello -n ${NAMESPACE}
+          if [ "$http_code" != "200" ]; then
+            echo "Error: Webhook call failed with HTTP $http_code"
+            exit 1
+          fi
           
-          # 显示部署状态和访问信息
-          echo ""
-          echo "=== 部署完成 ==="
-          echo ""
-          echo "=== Pods ==="
-          kubectl get pods -l app=hello -n ${NAMESPACE}
-          echo ""
-          echo "=== Services ==="
-          kubectl get svc hello -n ${NAMESPACE}
-          echo ""
-          echo "=== 访问信息 ==="
-          NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null || echo "获取节点IP失败")
-          echo "通过 IP 访问: http://${NODE_IP}:30080"
-          echo "或使用端口转发: kubectl port-forward svc/hello 8080:8080 -n ${NAMESPACE}"
+          echo "Deployment triggered successfully"
+        env:
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
 

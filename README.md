@@ -49,7 +49,7 @@ docker run -p 8080:8080 hello-go:latest
 编辑 `k8s/deployment.yaml`，将 `OWNER` 替换为你的 GitHub 用户名或组织名：
 
 ```yaml
-image: ghcr.io/YOUR_USERNAME/hello-go:latest
+image: ghcr.io/jaxgg/hello-go:latest
 ```
 
 #### 3. 手动部署（可选）
