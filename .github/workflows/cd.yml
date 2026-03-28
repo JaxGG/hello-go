@@ -1,0 +1,71 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+
+env:
+  REGISTRY: ghcr.io
+  K8S_NAMESPACE: hello-go
+  DEPLOYMENT_NAME: hello
+  CONTAINER_NAME: hello
+
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Determine image tag
+        id: vars
+        run: |
+          image_name="$(echo '${{ github.event.workflow_run.repository.full_name }}' | tr '[:upper:]' '[:lower:]')"
+          short_sha="${{ github.event.workflow_run.head_sha }}"
+          short_sha="${short_sha::7}"
+          echo "image_name=${image_name}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "image=${REGISTRY}/${image_name}:sha-${short_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Copy manifests to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          source: "k8s"
+          target: "~/hello-go-deploy"
+
+      - name: Deploy to k3s
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          IMAGE: ${{ steps.vars.outputs.image }}
+          K8S_NAMESPACE: ${{ env.K8S_NAMESPACE }}
+          DEPLOYMENT_NAME: ${{ env.DEPLOYMENT_NAME }}
+          CONTAINER_NAME: ${{ env.CONTAINER_NAME }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          envs: IMAGE,K8S_NAMESPACE,DEPLOYMENT_NAME,CONTAINER_NAME
+          script: |
+            set -euo pipefail
+            cd ~/hello-go-deploy
+            kubectl apply -f k8s/namespace.yaml
+            kubectl apply -f k8s/deployment.yaml
+            kubectl -n "$K8S_NAMESPACE" set image "deployment/$DEPLOYMENT_NAME" "$CONTAINER_NAME=$IMAGE"
+            kubectl -n "$K8S_NAMESPACE" rollout status "deployment/$DEPLOYMENT_NAME" --timeout=120s
+            kubectl -n "$K8S_NAMESPACE" get pods -o wide
+            kubectl -n "$K8S_NAMESPACE" get svc "$DEPLOYMENT_NAME"

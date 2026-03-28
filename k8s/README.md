@@ -1,86 +1,44 @@
-# Kubernetes 配置文件说明
+# Kubernetes 配置说明
 
-## 文件列表
+当前主部署路径面向单机 `k3s`：
 
-### 必需文件
+- 使用 `namespace.yaml` 创建 `hello-go` 命名空间
+- 使用 `deployment.yaml` 创建应用和 `NodePort` Service
+- 通过 `GitHub Actions -> SSH -> kubectl` 自动部署
 
-- **deployment.yaml** - 包含 Deployment 和 Service
-  - Deployment: 应用部署配置
-  - Service: 服务暴露配置（NodePort）
+## 当前使用的文件
 
-### 可选文件
+- `namespace.yaml`：创建 `hello-go` 命名空间
+- `deployment.yaml`：创建 `Deployment` 和 `Service`
 
-- **ingress.yaml** - Ingress 配置（需要 Ingress Controller）
-  - 用于从集群外部通过域名访问
-  - 需要修改 `host` 字段为你的域名
-  - 需要安装 Ingress Controller（如 nginx-ingress）
+## 部署命令
 
-- **hpa.yaml** - 水平自动扩缩容配置
-  - 根据 CPU/内存使用率自动调整 Pod 数量
-  - 需要安装 metrics-server
-
-## 部署方式
-
-### 基础部署（仅 Deployment + Service）
+首次初始化或手动重放时：
 
 ```bash
+kubectl apply -f k8s/namespace.yaml
 kubectl apply -f k8s/deployment.yaml
 ```
 
-### 完整部署（包含 Ingress 和 HPA）
+自动部署时，GitHub Actions 会在 VPS 上执行：
 
 ```bash
-# 确保已安装 metrics-server（HPA 需要）
-kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-
-# 部署所有资源
-kubectl apply -f k8s/
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/deployment.yaml
+kubectl -n hello-go set image deployment/hello hello=ghcr.io/jaxgg/hello-go:sha-<short_sha>
+kubectl -n hello-go rollout status deployment/hello --timeout=120s
 ```
 
 ## 访问方式
 
-### 方式 1: NodePort（通过 IP 访问，推荐）
+服务通过 `NodePort` 暴露：
 
 ```bash
-# 获取节点 IP
-kubectl get nodes -o wide
-
-# 通过节点 IP + 30080 端口访问
-curl http://<NODE_IP>:30080
-
-# 或在浏览器访问
-# http://<NODE_IP>:30080
+curl http://<VPS_IP>:30080
 ```
 
-**示例**：
-- 如果节点 IP 是 `192.168.1.100`，访问地址为：`http://192.168.1.100:30080`
+## 说明
 
-### 方式 2: LoadBalancer（云平台，如 AWS/GCP/Azure）
-
-如果使用云平台，可以使用 `service-loadbalancer.yaml`：
-
-```bash
-# 部署 LoadBalancer Service
-kubectl apply -f k8s/service-loadbalancer.yaml
-
-# 查看外部 IP
-kubectl get svc hello-lb
-
-# 等待 EXTERNAL-IP 分配后，直接访问该 IP
-curl http://<EXTERNAL-IP>
-```
-
-### 方式 3: Port Forward（开发测试）
-
-```bash
-kubectl port-forward svc/hello 8080:8080
-# 访问 http://localhost:8080
-```
-
-### 方式 4: Ingress（需要域名）
-
-1. 安装 Ingress Controller（如 nginx-ingress）
-2. 修改 `ingress.yaml` 中的域名
-3. 配置 DNS 解析
-4. 访问 `http://hello.example.com`
-
+- `deployment.yaml` 中的默认镜像是 `ghcr.io/jaxgg/hello-go:latest`
+- 实际自动部署时，CD 会覆盖为对应的 commit tag
+- 仓库已经移除了旧的 `kind/webhook` 方案和当前不使用的可选清单，只保留主部署路径所需文件

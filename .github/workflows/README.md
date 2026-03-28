@@ -1,56 +1,61 @@
 # CI/CD 配置说明
 
-## GitHub Secrets 配置
+当前流程面向单机 `k3s` 和 `GHCR`：
 
-在 GitHub 仓库的 Settings > Secrets and variables > Actions 中配置以下 secrets：
+- `CI`：测试、构建镜像、推送到 `ghcr.io`
+- `CD`：通过 SSH 登录 VPS，执行 `kubectl` 部署到 `k3s`
 
-### 必需配置
+## GitHub Secrets
 
-1. **KUBECONFIG** (必需)
-   - 你的 Kubernetes 集群的 kubeconfig 文件内容（base64 编码）
-   - 获取方式：
-     ```bash
-     cat ~/.kube/config | base64
-     ```
+在仓库 `Settings > Secrets and variables > Actions` 中配置：
 
-2. **KUBERNETES_NAMESPACE** (可选)
-   - 部署的目标命名空间，默认为 `default`
-   - 如果使用默认命名空间，可以不配置
+- `VPS_HOST`：VPS 公网 IP 或域名
+- `VPS_PORT`：SSH 端口，通常是 `22`
+- `VPS_USER`：部署用户，例如 `deploy`
+- `VPS_SSH_KEY`：部署用户的私钥内容
 
-### 镜像仓库
+当前默认使用公开 GHCR 镜像，因此不需要额外的镜像拉取凭据。
 
-- 使用 GitHub Container Registry (ghcr.io)，自动使用 `GITHUB_TOKEN`
-- 如需使用 Docker Hub，修改 workflow 中的 `REGISTRY` 和登录步骤
+## Workflow 说明
 
-## 工作流说明
+### `ci.yml`
 
-### CI 流程（自动）
+- `push main`：运行测试并推送镜像
+- `pull_request -> main`：运行测试并构建镜像，但不推送
 
-**文件**: `ci-cd.yml`
+镜像标签规则：
 
-1. **Push 到 main/master 分支**：自动构建镜像并推送到 ghcr.io
-2. **Pull Request**：只构建镜像，不推送（用于测试）
+- `latest`
+- `sha-<short_sha>`
 
-### CD 流程（手动）
+### `cd.yml`
 
-**文件**: `deploy.yml`
+- `CI` 在 `main` 分支成功完成后自动触发
+- 先把仓库里的 `k8s/` 目录复制到 VPS
+- 再通过 SSH 在 VPS 上执行：
 
-1. **手动触发部署**：
-   - 进入 GitHub 仓库的 Actions 页面
-   - 选择 "Deploy to Kubernetes" workflow
-   - 点击 "Run workflow"
-   - 输入参数：
-     - **image_tag**: 要部署的镜像标签（如 `latest`, `main-abc123`）
-     - **namespace**: Kubernetes 命名空间（可选，默认使用 secrets 中的配置）
+```bash
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/deployment.yaml
+kubectl -n hello-go set image deployment/hello hello=ghcr.io/jaxgg/hello-go:sha-<short_sha>
+kubectl -n hello-go rollout status deployment/hello --timeout=120s
+```
 
-2. **部署流程**：
-   - 拉取代码
-   - 配置 kubectl
-   - 更新 deployment.yaml 中的镜像标签
-   - 部署到 Kubernetes
-   - 显示部署状态和访问信息
+## 首次初始化
 
-## 更新镜像名称
+部署前先在 VPS 上完成：
 
-在 `k8s/deployment.yaml` 中，将 `OWNER` 替换为你的 GitHub 用户名或组织名。
+```bash
+kubectl create namespace hello-go
+```
 
+如果 namespace 已经存在，可以忽略报错；后续 CD 会使用 `kubectl apply` 保持幂等。
+
+## 回滚
+
+如果某次部署异常，可在 VPS 上执行：
+
+```bash
+kubectl -n hello-go rollout undo deployment/hello
+kubectl -n hello-go rollout status deployment/hello --timeout=120s
+```
