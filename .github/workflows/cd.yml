@@ -52,20 +52,18 @@ jobs:
         env:
           IMAGE: ${{ steps.vars.outputs.image }}
           K8S_NAMESPACE: ${{ env.K8S_NAMESPACE }}
-          DEPLOYMENT_NAME: ${{ env.DEPLOYMENT_NAME }}
-          CONTAINER_NAME: ${{ env.CONTAINER_NAME }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
-          envs: IMAGE,K8S_NAMESPACE,DEPLOYMENT_NAME,CONTAINER_NAME
+          envs: IMAGE,K8S_NAMESPACE
           script: |
             set -euo pipefail
             cd ~/hello-go-deploy
             kubectl apply -f k8s/namespace.yaml
-            kubectl apply -f k8s/deployment.yaml
-            kubectl -n "$K8S_NAMESPACE" set image "deployment/$DEPLOYMENT_NAME" "$CONTAINER_NAME=$IMAGE"
-            kubectl -n "$K8S_NAMESPACE" rollout status "deployment/$DEPLOYMENT_NAME" --timeout=120s
+            sed "s|IMAGE_PLACEHOLDER|$IMAGE|g" k8s/deployment.yaml > k8s/deployment.rendered.yaml
+            kubectl apply -f k8s/deployment.rendered.yaml
+            kubectl -n "$K8S_NAMESPACE" rollout status deployment/hello --timeout=180s
             kubectl -n "$K8S_NAMESPACE" get pods -o wide
-            kubectl -n "$K8S_NAMESPACE" get svc "$DEPLOYMENT_NAME"
+            kubectl -n "$K8S_NAMESPACE" get svc hello
